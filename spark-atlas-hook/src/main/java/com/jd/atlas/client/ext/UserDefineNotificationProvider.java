@@ -5,7 +5,9 @@ import org.apache.atlas.AtlasException;
 import org.apache.commons.configuration.Configuration;
 import org.apache.commons.configuration.PropertiesConfiguration;
 
+import java.io.InputStream;
 import java.net.URL;
+import java.util.Properties;
 
 public class UserDefineNotificationProvider {
     private static UserDefineKafkaNotification kafka;
@@ -14,10 +16,10 @@ public class UserDefineNotificationProvider {
     public static  UserDefineKafkaNotification get() {
         if (kafka == null) {
             try {
-                URL url = UserDefineNotificationProvider.class.getClassLoader().getResource("atlas-application.properties");
-                System.out.println("URL:"+url);
-                Configuration applicationProperties = new PropertiesConfiguration(url) ;
-                kafka = new UserDefineKafkaNotification(applicationProperties);
+                InputStream inputStream = UserDefineNotificationProvider.class.getClassLoader().getResourceAsStream("atlas-application.properties");
+                Properties atlasProperties = new Properties();
+                atlasProperties.load(inputStream);
+                kafka = new UserDefineKafkaNotification(atlasProperties);
             } catch (Exception e) {
                 throw new RuntimeException(e);
             }

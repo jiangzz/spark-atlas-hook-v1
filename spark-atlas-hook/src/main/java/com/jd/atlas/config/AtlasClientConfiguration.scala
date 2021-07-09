@@ -1,6 +1,7 @@
 package com.jd.atlas.config
 
 import java.net.URL
+import java.util.Properties
 
 import com.jd.atlas.client.ext.UserDefineNotificationProvider
 import org.apache.atlas.ApplicationProperties
@@ -16,22 +17,23 @@ object AtlasClientConfiguration{
   val CLUSTER_NAME = ConfigEntry("atlas.metadata.namespace", "5k")
 
   private lazy val configuration = {
-    val url = classOf[UserDefineNotificationProvider].getClassLoader.getResource("atlas-application.properties")
-    System.out.println("URL:" + url)
-    new PropertiesConfiguration(url)
-  }//ApplicationProperties.get()
+    val input = classOf[UserDefineNotificationProvider].getClassLoader.getResourceAsStream("atlas-application.properties")
+    val props = new Properties()
+    props.load(input)
+    props
+  }
 
   def getUrl(): Object = {
      Option(configuration.getProperty(AtlasClientConfiguration.ATLAS_REST_ENDPOINT.key)).getOrElse(AtlasClientConfiguration.ATLAS_REST_ENDPOINT.defaultValue)
   }
   def getUserName(): String = {
-    Option(configuration.getString(AtlasClientConfiguration.CLIENT_USERNAME.key)).getOrElse(AtlasClientConfiguration.CLIENT_USERNAME.defaultValue)
+    Option(configuration.getProperty(AtlasClientConfiguration.CLIENT_USERNAME.key)).getOrElse(AtlasClientConfiguration.CLIENT_USERNAME.defaultValue)
   }
   def getPassword(): String = {
-    Option(configuration.getString(AtlasClientConfiguration.CLIENT_PASSWORD.key)).getOrElse(AtlasClientConfiguration.CLIENT_PASSWORD.defaultValue)
+    Option(configuration.getProperty(AtlasClientConfiguration.CLIENT_PASSWORD.key)).getOrElse(AtlasClientConfiguration.CLIENT_PASSWORD.defaultValue)
   }
   def getMetaNamespace():String={
-     Option(configuration.getString(AtlasClientConfiguration.CLUSTER_NAME.key)).getOrElse(AtlasClientConfiguration.CLUSTER_NAME.defaultValue)
+     Option(configuration.getProperty(AtlasClientConfiguration.CLUSTER_NAME.key)).getOrElse(AtlasClientConfiguration.CLUSTER_NAME.defaultValue)
   }
   def get(t: ConfigEntry): String = {
     Option(configuration.getProperty(t.key).asInstanceOf[String]).getOrElse(t.defaultValue)

@@ -1,13 +1,10 @@
 package com.jd.atlas.client.ext;
 import org.apache.atlas.hook.AtlasHook;
 import com.google.common.util.concurrent.ThreadFactoryBuilder;
-import org.apache.atlas.ApplicationProperties;
 import org.apache.atlas.AtlasConstants;
 import org.apache.atlas.model.notification.HookNotification;
 import org.apache.atlas.notification.NotificationException;
 import org.apache.atlas.notification.NotificationInterface;
-import org.apache.commons.configuration.Configuration;
-import org.apache.commons.configuration.PropertiesConfiguration;
 import org.apache.commons.lang.StringUtils;
 import org.apache.hadoop.security.UserGroupInformation;
 import org.apache.hadoop.util.ShutdownHookManager;
@@ -15,13 +12,11 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
-import java.net.URL;
+import java.io.InputStream;
 import java.security.PrivilegedExceptionAction;
 import java.util.List;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.LinkedBlockingDeque;
-import java.util.concurrent.ThreadPoolExecutor;
-import java.util.concurrent.TimeUnit;
+import java.util.Properties;
+import java.util.concurrent.*;
 
 
 /**
@@ -34,7 +29,6 @@ public abstract class UserDefineAtlasHook extends AtlasHook {
     public static final String ATLAS_NOTIFICATION_ASYNCHRONOUS_MIN_THREADS        = "atlas.notification.hook.asynchronous.minThreads";
     public static final String ATLAS_NOTIFICATION_ASYNCHRONOUS_MAX_THREADS        = "atlas.notification.hook.asynchronous.maxThreads";
     public static final String ATLAS_NOTIFICATION_ASYNCHRONOUS_KEEP_ALIVE_TIME_MS = "atlas.notification.hook.asynchronous.keepAliveTimeMs";
-    public static final String ATLAS_NOTIFICATION_ASYNCHRONOUS_QUEUE_SIZE         = "atlas.notification.hook.asynchronous.queueSize";
     public static final String ATLAS_NOTIFICATION_MAX_RETRIES                     = "atlas.notification.hook.retry.maxRetries";
     public static final String ATLAS_NOTIFICATION_RETRY_INTERVAL                  = "atlas.notification.hook.retry.interval";
     public static final String ATLAS_NOTIFICATION_FAILED_MESSAGES_FILENAME_KEY    = "atlas.notification.failed.messages.filename";
@@ -44,7 +38,7 @@ public abstract class UserDefineAtlasHook extends AtlasHook {
     public static final String CLUSTER_NAME_KEY                                   = "atlas.cluster.name";
     public static final String DEFAULT_CLUSTER_NAME                               = "primary";
 
-    protected static Configuration         atlasProperties;
+    protected static Properties atlasProperties;
     protected static NotificationInterface notificationInterface;
 
     private static final String               metadataNamespace;
@@ -58,17 +52,16 @@ public abstract class UserDefineAtlasHook extends AtlasHook {
 
     static {
         try {
-            URL url = UserDefineNotificationProvider.class.getClassLoader().getResource("atlas-application.properties");
-            System.out.println("URL:"+url);
-            Configuration applicationProperties = new PropertiesConfiguration(url) ;
-            atlasProperties = new PropertiesConfiguration(url) ;//ApplicationProperties.get();
+            InputStream inputStream = UserDefineNotificationProvider.class.getClassLoader().getResourceAsStream("atlas-application.properties");
+            atlasProperties = new Properties();
+            atlasProperties.load(inputStream); //ApplicationProperties.get();
         } catch (Exception e) {
             LOG.info("Failed to load application properties", e);
         }
 
-        String failedMessageFile = atlasProperties.getString(ATLAS_NOTIFICATION_FAILED_MESSAGES_FILENAME_KEY, ATLAS_HOOK_FAILED_MESSAGES_LOG_DEFAULT_NAME);
+        String failedMessageFile = atlasProperties.getProperty(ATLAS_NOTIFICATION_FAILED_MESSAGES_FILENAME_KEY, ATLAS_HOOK_FAILED_MESSAGES_LOG_DEFAULT_NAME);
 
-        logFailedMessages = atlasProperties.getBoolean(ATLAS_NOTIFICATION_LOG_FAILED_MESSAGES_ENABLED_KEY, true);
+        logFailedMessages = Boolean.valueOf(atlasProperties.getProperty(ATLAS_NOTIFICATION_LOG_FAILED_MESSAGES_ENABLED_KEY, "true"));
 
         if (logFailedMessages) {
             failedMessagesLogger = new UserDefineFailedMessagesLogger(failedMessageFile);
@@ -78,8 +71,8 @@ public abstract class UserDefineAtlasHook extends AtlasHook {
         }
 
         metadataNamespace         = getMetadataNamespace(atlasProperties);
-        notificationMaxRetries    = atlasProperties.getInt(ATLAS_NOTIFICATION_MAX_RETRIES, 3);
-        notificationRetryInterval = atlasProperties.getInt(ATLAS_NOTIFICATION_RETRY_INTERVAL, 1000);
+        notificationMaxRetries    = Integer.valueOf(atlasProperties.getProperty(ATLAS_NOTIFICATION_MAX_RETRIES, "3"));
+        notificationRetryInterval = Integer.valueOf(atlasProperties.getProperty(ATLAS_NOTIFICATION_RETRY_INTERVAL, "1000"));
         //用户自定义UserDefineNotificationProvider
         notificationInterface     = UserDefineNotificationProvider.get();
 
@@ -93,19 +86,18 @@ public abstract class UserDefineAtlasHook extends AtlasHook {
 
         notificationInterface.setCurrentUser(currentUser);
 
-        boolean isAsync = atlasProperties.getBoolean(ATLAS_NOTIFICATION_ASYNCHRONOUS, Boolean.TRUE);
+        boolean isAsync = Boolean.valueOf(atlasProperties.getProperty(ATLAS_NOTIFICATION_ASYNCHRONOUS, "true"));
 
         if (isAsync) {
-            int  minThreads      = atlasProperties.getInt(ATLAS_NOTIFICATION_ASYNCHRONOUS_MIN_THREADS, 1);
-            int  maxThreads      = atlasProperties.getInt(ATLAS_NOTIFICATION_ASYNCHRONOUS_MAX_THREADS, 1);
-            long keepAliveTimeMs = atlasProperties.getLong(ATLAS_NOTIFICATION_ASYNCHRONOUS_KEEP_ALIVE_TIME_MS, 10000);
-            int  queueSize       = atlasProperties.getInt(ATLAS_NOTIFICATION_ASYNCHRONOUS_QUEUE_SIZE, 1000);
+            int  minThreads      = Integer.valueOf(atlasProperties.getProperty(ATLAS_NOTIFICATION_ASYNCHRONOUS_MIN_THREADS, "1"));
+            int  maxThreads      = Integer.valueOf(atlasProperties.getProperty(ATLAS_NOTIFICATION_ASYNCHRONOUS_MAX_THREADS, "1"));
+            long keepAliveTimeMs = Long.valueOf(atlasProperties.getProperty(ATLAS_NOTIFICATION_ASYNCHRONOUS_KEEP_ALIVE_TIME_MS, "10000"));
 
             executor = new ThreadPoolExecutor(minThreads,
                     maxThreads,
                     keepAliveTimeMs,
                     TimeUnit.MILLISECONDS,
-                    new LinkedBlockingDeque<Runnable>(queueSize),
+                    new SynchronousQueue<>(),
                     new ThreadFactoryBuilder().setNameFormat("Atlas Notifier %d").setDaemon(true).build());
 
             ShutdownHookManager.get().addShutdownHook(new Thread() {
@@ -272,12 +264,12 @@ public abstract class UserDefineAtlasHook extends AtlasHook {
         }
     }
 
-    private static String getMetadataNamespace(Configuration config) {
-        return config.getString(CONF_METADATA_NAMESPACE, getClusterName(config));
+    private static String getMetadataNamespace(Properties config) {
+        return config.getProperty(CONF_METADATA_NAMESPACE, getClusterName(config));
     }
 
-    private static String getClusterName(Configuration config) {
-        return config.getString(CLUSTER_NAME_KEY, DEFAULT_CLUSTER_NAME);
+    private static String getClusterName(Properties config) {
+        return config.getProperty(CLUSTER_NAME_KEY, DEFAULT_CLUSTER_NAME);
     }
 
     @Override

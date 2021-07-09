@@ -14,6 +14,8 @@ import org.apache.commons.configuration.Configuration;
 import org.apache.commons.configuration.ConfigurationConverter;
 import org.apache.commons.lang.StringUtils;
 import org.apache.hadoop.security.UserGroupInformation;
+import org.apache.hadoop.security.alias.CredentialProvider;
+import org.apache.hadoop.security.alias.CredentialProviderFactory;
 import org.apache.kafka.clients.consumer.ConsumerConfig;
 import org.apache.kafka.clients.consumer.KafkaConsumer;
 import org.apache.kafka.clients.producer.*;
@@ -24,8 +26,7 @@ import java.io.IOException;
 import java.util.*;
 import java.util.concurrent.Future;
 
-import static org.apache.atlas.security.SecurityProperties.TLS_ENABLED;
-import static org.apache.atlas.security.SecurityProperties.TRUSTSTORE_PASSWORD_KEY;
+import static org.apache.atlas.security.SecurityProperties.*;
 import static org.apache.atlas.security.SecurityUtil.getPassword;
 
 public class UserDefineKafkaNotification extends AbstractNotification implements Service {
@@ -80,15 +81,20 @@ public class UserDefineKafkaNotification extends AbstractNotification implements
      * @param applicationProperties the application properties used to configure Kafka
      * @throws AtlasException if the notification interface can not be created
      */
-    public UserDefineKafkaNotification(Configuration applicationProperties) throws AtlasException {
-        super(applicationProperties);
+    public UserDefineKafkaNotification(Properties applicationProperties) throws AtlasException {
+        super();
 
         LOG.info("==> UserDefineKafkaNotification()");
-        Configuration kafkaConf = ApplicationProperties.getSubsetConfiguration(applicationProperties, PROPERTY_PREFIX);
+        //Configuration kafkaConf = ApplicationProperties.getSubsetConfiguration(applicationProperties, PROPERTY_PREFIX);
 
-        properties = ConfigurationConverter.getProperties(kafkaConf);
-        pollTimeOutMs = kafkaConf.getLong("poll.timeout.ms", 1000);
-        consumerClosedErrorMsg = kafkaConf.getString("error.message.consumer_closed", DEFAULT_CONSUMER_CLOSED_ERROR_MESSAGE);
+        properties = new Properties();
+
+        applicationProperties.entrySet().stream().filter(entry->entry.getKey().toString().startsWith(PROPERTY_PREFIX)).forEach(entry->{
+                properties.put(entry.getKey().toString().replace(PROPERTY_PREFIX+".",""),entry.getValue());
+        });
+
+        pollTimeOutMs = Long.valueOf(properties.getProperty("poll.timeout.ms", "1000"));
+        consumerClosedErrorMsg = properties.getProperty("error.message.consumer_closed", DEFAULT_CONSUMER_CLOSED_ERROR_MESSAGE);
 
         //Override default configs
         properties.put(ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG, "org.apache.kafka.common.serialization.StringSerializer");
@@ -97,38 +103,50 @@ public class UserDefineKafkaNotification extends AbstractNotification implements
         properties.put(ConsumerConfig.VALUE_DESERIALIZER_CLASS_CONFIG, "org.apache.kafka.common.serialization.StringDeserializer");
         properties.put(ConsumerConfig.AUTO_OFFSET_RESET_CONFIG, "earliest");
 
-        boolean oldApiCommitEnableFlag = kafkaConf.getBoolean("auto.commit.enable", false);
+        boolean oldApiCommitEnableFlag = Boolean.valueOf(properties.getProperty("auto.commit.enable", "false"));
 
         //set old autocommit value if new autoCommit property is not set.
-        properties.put("enable.auto.commit", kafkaConf.getBoolean("enable.auto.commit", oldApiCommitEnableFlag));
-        properties.put("session.timeout.ms", kafkaConf.getString("session.timeout.ms", "30000"));
+        properties.put("enable.auto.commit", Boolean.valueOf(properties.getProperty("enable.auto.commit", oldApiCommitEnableFlag+"")));
+        properties.put("session.timeout.ms", properties.getProperty("session.timeout.ms", "30000"));
 
-        if (applicationProperties.getBoolean(TLS_ENABLED, false)) {
+        if ( Boolean.valueOf(properties.getProperty(TLS_ENABLED, "false"))) {
             try {
-                properties.put("ssl.truststore.password", getPassword(applicationProperties, TRUSTSTORE_PASSWORD_KEY));
+                properties.put("ssl.truststore.password", getPassword1(properties, TRUSTSTORE_PASSWORD_KEY));
             } catch (Exception e) {
                 LOG.error("Exception while getpassword truststore.password ", e);
             }
         }
 
         // if no value is specified for max.poll.records, set to 1
-        properties.put("max.poll.records", kafkaConf.getInt("max.poll.records", 1));
+        properties.put("max.poll.records", properties.getProperty("max.poll.records", "1"));
 
         setKafkaJAASProperties(applicationProperties, properties);
 
         LOG.info("<== UserDefineKafkaNotification()");
     }
+    public static String getPassword1(Properties config, String key) throws IOException {
 
-    @VisibleForTesting
-    protected UserDefineKafkaNotification(Properties properties) {
-        super();
+        String password;
 
-        LOG.info("==> UserDefineKafkaNotification()");
+        String provider = config.getProperty(CERT_STORES_CREDENTIAL_PROVIDER_PATH);
+        if (provider != null) {
+            LOG.info("Attempting to retrieve password for key {} from configured credential provider path {}", key, provider);
+            org.apache.hadoop.conf.Configuration c = new org.apache.hadoop.conf.Configuration();
+            c.set(CredentialProviderFactory.CREDENTIAL_PROVIDER_PATH, provider);
+            CredentialProvider credentialProvider = CredentialProviderFactory.getProviders(c).get(0);
+            CredentialProvider.CredentialEntry entry = credentialProvider.getCredentialEntry(key);
+            if (entry == null) {
+                throw new IOException(String.format("No credential entry found for %s. "
+                        + "Please create an entry in the configured credential provider", key));
+            } else {
+                password = String.valueOf(entry.getCredential());
+            }
 
-        this.properties = properties;
-        this.pollTimeOutMs = 1000L;
+        } else {
+            throw new IOException("No credential provider path configured for storage of certificate store passwords");
+        }
 
-        LOG.info("<== UserDefineKafkaNotification()");
+        return password;
     }
 
     @VisibleForTesting
@@ -393,7 +411,7 @@ public class UserDefineKafkaNotification extends AbstractNotification implements
         return ret;
     }
 
-    void setKafkaJAASProperties(Configuration configuration, Properties kafkaProperties) {
+    void setKafkaJAASProperties(Properties configuration, Properties kafkaProperties) {
         LOG.debug("==> UserDefineKafkaNotification.setKafkaJAASProperties()");
 
         if (kafkaProperties.containsKey(KAFKA_SASL_JAAS_CONFIG_PROPERTY)) {
@@ -401,7 +419,11 @@ public class UserDefineKafkaNotification extends AbstractNotification implements
             return;
         }
 
-        Properties jaasConfig = ApplicationProperties.getSubsetAsProperties(configuration, JAAS_CONFIG_PREFIX_PARAM);
+        Properties jaasConfig = new Properties();
+        configuration.entrySet().stream().filter(entry-> entry.getKey().toString().startsWith(JAAS_CONFIG_PREFIX_PARAM)).forEach(entry->{
+            jaasConfig.put(entry.getKey().toString().replace(JAAS_CONFIG_PREFIX_PARAM+".",""),entry.getValue());
+        });
+
         // JAAS Configuration is present then update set those properties in sasl.jaas.config
         if (jaasConfig != null && !jaasConfig.isEmpty()) {
             String jaasClientName = JAAS_DEFAULT_CLIENT_NAME;
@@ -411,7 +433,10 @@ public class UserDefineKafkaNotification extends AbstractNotification implements
                 LOG.debug("Checking if ticketBased-KafkaClient is set");
                 // if ticketBased-KafkaClient property is not specified then use the default client name
                 String ticketBasedConfigPrefix = JAAS_CONFIG_PREFIX_PARAM + "." + JAAS_TICKET_BASED_CLIENT_NAME;
-                Configuration ticketBasedConfig = configuration.subset(ticketBasedConfigPrefix);
+                Properties ticketBasedConfig = new Properties();
+                configuration.entrySet().stream().filter(entry-> entry.getKey().toString().startsWith(ticketBasedConfigPrefix)).forEach(entry->{
+                    jaasConfig.put(entry.getKey().toString().replace(ticketBasedConfigPrefix+".",""),entry.getValue());
+                });
 
                 if (ticketBasedConfig != null && !ticketBasedConfig.isEmpty()) {
                     LOG.debug("ticketBased-KafkaClient JAAS configuration is set, using it");
