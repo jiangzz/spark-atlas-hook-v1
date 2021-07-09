@@ -3,8 +3,7 @@ package com.jd.atlas.parser.impl
 import java.util
 import java.util.Date
 
-import com.jd.atlas.client.ext.NotificationContextHolder
-import com.jd.atlas.config.AtlasClientConfiguration
+import com.jd.atlas.client.ext.{AtlasProperties, NotificationContextHolder}
 import com.jd.atlas.interceptor.SQLQueryContext
 import com.jd.atlas.parser.Harvester
 import org.apache.atlas.`type`.AtlasTypeUtil
@@ -30,7 +29,7 @@ class CreateDataSourceTableAsSelectHarvester extends Harvester[CreateDataSourceT
     }else{
       database = node.table.identifier.database.getOrElse("default")
     }
-    val namespace=AtlasClientConfiguration.getMetaNamespace()
+    val namespace=AtlasProperties.getMetaNamespace()
     val resultTable=s"${database}.${tableName}@${namespace}"
     //解析出输入表
     val tableRelations = node.collectLeaves().collect({ case t: HiveTableRelation => t })
@@ -180,7 +179,7 @@ class CreateDataSourceTableAsSelectHarvester extends Harvester[CreateDataSourceT
     atlasEntity.setAttribute("queryText", querySQL)
     atlasEntity.setAttribute("recentQueries", util.Collections.singletonList(querySQL))
     atlasEntity.setAttribute("queryPlan", "Not Supported")
-    atlasEntity.setAttribute("clusterName", AtlasClientConfiguration.getMetaNamespace())
+    atlasEntity.setAttribute("clusterName", AtlasProperties.getMetaNamespace())
     atlasEntity
   }
 }

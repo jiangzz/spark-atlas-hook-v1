@@ -11,8 +11,7 @@ import org.apache.spark.internal.Logging
 class KafkaAtlasClient  extends UserDefineAtlasHook with AtlasClient with Logging{
 
   override def createEntities(extInfo: AtlasEntity.AtlasEntitiesWithExtInfo): Unit = {
-    val notification = new HookNotification.EntityCreateRequestV2("sparkhook", extInfo)
-    logInfo(String.format("%s发送消息%s","sparkhook",extInfo))
+    val notification = new HookNotification.EntityCreateRequestV2("spark-hook", extInfo)
     super.notifyEntities(Collections.singletonList(notification),null)
   }
 }

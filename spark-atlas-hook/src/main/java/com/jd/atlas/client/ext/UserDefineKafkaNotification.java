@@ -1,17 +1,10 @@
 package com.jd.atlas.client.ext;
 
 import com.google.common.annotations.VisibleForTesting;
-import org.apache.atlas.ApplicationProperties;
-import org.apache.atlas.AtlasConfiguration;
 import org.apache.atlas.AtlasException;
-import org.apache.atlas.kafka.AtlasKafkaConsumer;
-import org.apache.atlas.kafka.KafkaNotification;
-import org.apache.atlas.notification.AbstractNotification;
 import org.apache.atlas.notification.NotificationConsumer;
 import org.apache.atlas.notification.NotificationException;
 import org.apache.atlas.service.Service;
-import org.apache.commons.configuration.Configuration;
-import org.apache.commons.configuration.ConfigurationConverter;
 import org.apache.commons.lang.StringUtils;
 import org.apache.hadoop.security.UserGroupInformation;
 import org.apache.hadoop.security.alias.CredentialProvider;
@@ -27,14 +20,12 @@ import java.util.*;
 import java.util.concurrent.Future;
 
 import static org.apache.atlas.security.SecurityProperties.*;
-import static org.apache.atlas.security.SecurityUtil.getPassword;
 
-public class UserDefineKafkaNotification extends AbstractNotification implements Service {
+public class UserDefineKafkaNotification extends UserDefineAbstractNotification implements Service {
     public static final Logger LOG = LoggerFactory.getLogger(UserDefineKafkaNotification.class);
 
     public static final String PROPERTY_PREFIX = "atlas.kafka";
-    public static final String ATLAS_HOOK_TOPIC = AtlasConfiguration.NOTIFICATION_HOOK_TOPIC_NAME.getString();
-    public static final String ATLAS_ENTITIES_TOPIC = AtlasConfiguration.NOTIFICATION_ENTITIES_TOPIC_NAME.getString();
+    public static final String ATLAS_HOOK_TOPIC = AtlasProperties.getHook();
     protected static final String CONSUMER_GROUP_ID_PROPERTY = "group.id";
 
     static final String KAFKA_SASL_JAAS_CONFIG_PROPERTY = "sasl.jaas.config";
@@ -47,23 +38,10 @@ public class UserDefineKafkaNotification extends AbstractNotification implements
     private static final String JAAS_PRINCIPAL_PROP = "principal";
     private static final String JAAS_DEFAULT_CLIENT_NAME = "KafkaClient";
     private static final String JAAS_TICKET_BASED_CLIENT_NAME = "ticketBased-KafkaClient";
-
-    private static final String[] ATLAS_HOOK_CONSUMER_TOPICS = AtlasConfiguration.NOTIFICATION_HOOK_CONSUMER_TOPIC_NAMES.getStringArray(ATLAS_HOOK_TOPIC);
-    private static final String[] ATLAS_ENTITIES_CONSUMER_TOPICS = AtlasConfiguration.NOTIFICATION_ENTITIES_CONSUMER_TOPIC_NAMES.getStringArray(ATLAS_ENTITIES_TOPIC);
-
     private static final String DEFAULT_CONSUMER_CLOSED_ERROR_MESSAGE = "This consumer has already been closed.";
-
     private static final Map<NotificationType, String> PRODUCER_TOPIC_MAP = new HashMap<NotificationType, String>() {
         {
             put(NotificationType.HOOK, ATLAS_HOOK_TOPIC);
-            put(NotificationType.ENTITIES, ATLAS_ENTITIES_TOPIC);
-        }
-    };
-
-    private static final Map<NotificationType, String[]> CONSUMER_TOPICS_MAP = new HashMap<NotificationType, String[]>() {
-        {
-            put(NotificationType.HOOK, trimAndPurge(ATLAS_HOOK_CONSUMER_TOPICS));
-            put(NotificationType.ENTITIES, trimAndPurge(ATLAS_ENTITIES_CONSUMER_TOPICS));
         }
     };
 
@@ -108,6 +86,7 @@ public class UserDefineKafkaNotification extends AbstractNotification implements
         //set old autocommit value if new autoCommit property is not set.
         properties.put("enable.auto.commit", Boolean.valueOf(properties.getProperty("enable.auto.commit", oldApiCommitEnableFlag+"")));
         properties.put("session.timeout.ms", properties.getProperty("session.timeout.ms", "30000"));
+
 
         if ( Boolean.valueOf(properties.getProperty(TLS_ENABLED, "false"))) {
             try {
@@ -171,59 +150,9 @@ public class UserDefineKafkaNotification extends AbstractNotification implements
     }
 
 
-    // ----- NotificationInterface -------------------------------------------
     @Override
     public <T> List<NotificationConsumer<T>> createConsumers(NotificationType notificationType, int numConsumers) {
-        return createConsumers(notificationType, numConsumers, Boolean.valueOf(properties.getProperty("enable.auto.commit", properties.getProperty("auto.commit.enable", "false"))));
-    }
-
-    @VisibleForTesting
-    public <T> List<NotificationConsumer<T>> createConsumers(NotificationType notificationType, int numConsumers, boolean autoCommitEnabled) {
-        LOG.info("==> UserDefineKafkaNotification.createConsumers(notificationType={}, numConsumers={}, autoCommitEnabled={})", notificationType, numConsumers, autoCommitEnabled);
-
-        String[] topics = CONSUMER_TOPICS_MAP.get(notificationType);
-         /*
-
-        if (numConsumers < topics.length) {
-            LOG.warn("consumers count {} is fewer than number of topics {}. Creating {} consumers, so that consumer count is equal to number of topics.", numConsumers, topics.length, topics.length);
-
-            numConsumers = topics.length;
-        } else if (numConsumers > topics.length) {
-            LOG.warn("consumers count {} is higher than number of topics {}. Creating {} consumers, so that consumer count is equal to number of topics", numConsumers, topics.length, topics.length);
-
-            numConsumers = topics.length;
-        }
-        */
-
-        List<KafkaConsumer> notificationConsumers = this.consumers.get(notificationType);
-
-        if (notificationConsumers == null) {
-            notificationConsumers = new ArrayList<>(numConsumers);
-
-            this.consumers.put(notificationType, notificationConsumers);
-        }
-
-        List<NotificationConsumer<T>> consumers = new ArrayList<>();
-        Properties consumerProperties = getConsumerProperties(notificationType);
-
-        consumerProperties.put("enable.auto.commit", autoCommitEnabled);
-
-        for (int i = 0; i < numConsumers; i++) {
-            KafkaConsumer existingConsumer = notificationConsumers.size() > i ? notificationConsumers.get(i) : null;
-            KafkaConsumer kafkaConsumer = getOrCreateKafkaConsumer(existingConsumer, consumerProperties, notificationType, i);
-
-            if (notificationConsumers.size() > i) {
-                notificationConsumers.set(i, kafkaConsumer);
-            } else {
-                notificationConsumers.add(kafkaConsumer);
-            }
-
-            consumers.add(new AtlasKafkaConsumer(notificationType, kafkaConsumer, autoCommitEnabled, pollTimeOutMs));
-        }
-
-        LOG.info("<== UserDefineKafkaNotification.createConsumers(notificationType={}, numConsumers={}, autoCommitEnabled={})", notificationType, numConsumers, autoCommitEnabled);
-
-        return consumers;
+        return null;
     }
 
     @Override
@@ -250,14 +179,14 @@ public class UserDefineKafkaNotification extends AbstractNotification implements
     @Override
     public void sendInternal(NotificationType notificationType, List<String> messages) throws NotificationException {
         KafkaProducer producer = getOrCreateProducer(notificationType);
-
         sendInternalToProducer(producer, notificationType, messages);
     }
 
     @VisibleForTesting
     void sendInternalToProducer(Producer p, NotificationType notificationType, List<String> messages) throws NotificationException {
-        String topic = PRODUCER_TOPIC_MAP.get(notificationType);
-        List<MessageContext> messageContexts = new ArrayList<>();
+         String topic = PRODUCER_TOPIC_MAP.get(notificationType);
+
+         List<MessageContext> messageContexts = new ArrayList<>();
 
         for (String message : messages) {
             ProducerRecord record=null;
@@ -269,12 +198,10 @@ public class UserDefineKafkaNotification extends AbstractNotification implements
                 record= new ProducerRecord(topic, message);
             }
             LOG.info("发送消息key:{}\tvalue:{}成功！",messageKey,message);
-
             if (LOG.isDebugEnabled()) {
                 LOG.debug("Sending message for topic {}: {} \t {}", topic,messageKey, message);
             }
             Future future = p.send(record);
-
             messageContexts.add(new MessageContext(future, message));
         }
 
@@ -318,28 +245,6 @@ public class UserDefineKafkaNotification extends AbstractNotification implements
         return consumerProperties;
     }
 
-    @VisibleForTesting
-    public KafkaConsumer getOrCreateKafkaConsumer(KafkaConsumer existingConsumer, Properties consumerProperties, NotificationType notificationType, int idxConsumer) {
-        KafkaConsumer ret = existingConsumer;
-
-        try {
-            if (ret == null || !isKafkaConsumerOpen(ret)) {
-                String[] topics = CONSUMER_TOPICS_MAP.get(notificationType);
-                String topic = topics[idxConsumer % topics.length];
-
-                LOG.debug("Creating new KafkaConsumer for topic : {}, index : {}", topic, idxConsumer);
-
-                ret = new KafkaConsumer(consumerProperties);
-
-                ret.subscribe(Arrays.asList(topic));
-            }
-        } catch (Exception ee) {
-            LOG.error("Exception in getKafkaConsumer ", ee);
-        }
-
-        return ret;
-    }
-
     private KafkaProducer getOrCreateProducer(NotificationType notificationType) {
         LOG.debug("==> UserDefineKafkaNotification.getOrCreateProducer()");
 
@@ -350,6 +255,10 @@ public class UserDefineKafkaNotification extends AbstractNotification implements
                 ret = producers.get(notificationType);
 
                 if (ret == null) {
+                    LOG.info("创建Kafka生产者");
+                    properties.entrySet().stream().map(p->p.getKey().toString()).forEach(k->{
+                      LOG.info("{}\t{}",k,properties.getProperty(k));
+                    });
                     ret = new KafkaProducer(properties);
 
                     producers.put(notificationType, ret);
@@ -394,21 +303,6 @@ public class UserDefineKafkaNotification extends AbstractNotification implements
         public String getMessage() {
             return message;
         }
-    }
-
-    // kafka-client doesn't have method to check if consumer is open, hence checking list topics and catching exception
-    private boolean isKafkaConsumerOpen(KafkaConsumer consumer) {
-        boolean ret = true;
-
-        try {
-            consumer.listTopics();
-        } catch (IllegalStateException ex) {
-            if (ex.getMessage().equalsIgnoreCase(consumerClosedErrorMsg)) {
-                ret = false;
-            }
-        }
-
-        return ret;
     }
 
     void setKafkaJAASProperties(Properties configuration, Properties kafkaProperties) {

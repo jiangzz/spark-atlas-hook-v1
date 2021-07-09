@@ -8,6 +8,7 @@ import org.apache.atlas.notification.NotificationInterface;
 import org.apache.commons.lang.StringUtils;
 import org.apache.hadoop.security.UserGroupInformation;
 import org.apache.hadoop.util.ShutdownHookManager;
+import org.apache.spark.internal.Logging;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -22,8 +23,8 @@ import java.util.concurrent.*;
 /**
  * A base class for atlas hooks.
  */
-public abstract class UserDefineAtlasHook extends AtlasHook {
-    private static final Logger LOG = LoggerFactory.getLogger(AtlasHook.class);
+public abstract class UserDefineAtlasHook  implements Logging {
+    private static final Logger LOG = LoggerFactory.getLogger(UserDefineAtlasHook.class);
 
     public static final String ATLAS_NOTIFICATION_ASYNCHRONOUS                    = "atlas.notification.hook.asynchronous";
     public static final String ATLAS_NOTIFICATION_ASYNCHRONOUS_MIN_THREADS        = "atlas.notification.hook.asynchronous.minThreads";
@@ -39,10 +40,9 @@ public abstract class UserDefineAtlasHook extends AtlasHook {
     public static final String DEFAULT_CLUSTER_NAME                               = "primary";
 
     protected static Properties atlasProperties;
-    protected static NotificationInterface notificationInterface;
+    protected static UserDefineNotificationInterface notificationInterface;
 
     private static final String               metadataNamespace;
-    private static final int                  SHUTDOWN_HOOK_WAIT_TIME_MS = 3000;
     private static final boolean              logFailedMessages;
     private static final UserDefineFailedMessagesLogger failedMessagesLogger;
     private static final int                  notificationMaxRetries;
@@ -52,11 +52,9 @@ public abstract class UserDefineAtlasHook extends AtlasHook {
 
     static {
         try {
-            InputStream inputStream = UserDefineNotificationProvider.class.getClassLoader().getResourceAsStream("atlas-application.properties");
-            atlasProperties = new Properties();
-            atlasProperties.load(inputStream); //ApplicationProperties.get();
+            atlasProperties=AtlasProperties.properties;
         } catch (Exception e) {
-            LOG.info("Failed to load application properties", e);
+            LOG.info("Failed to load spark-hook.properties", e);
         }
 
         String failedMessageFile = atlasProperties.getProperty(ATLAS_NOTIFICATION_FAILED_MESSAGES_FILENAME_KEY, ATLAS_HOOK_FAILED_MESSAGES_LOG_DEFAULT_NAME);
@@ -85,38 +83,12 @@ public abstract class UserDefineAtlasHook extends AtlasHook {
         }
 
         notificationInterface.setCurrentUser(currentUser);
-
-        boolean isAsync = Boolean.valueOf(atlasProperties.getProperty(ATLAS_NOTIFICATION_ASYNCHRONOUS, "true"));
-
-        if (isAsync) {
-            int  minThreads      = Integer.valueOf(atlasProperties.getProperty(ATLAS_NOTIFICATION_ASYNCHRONOUS_MIN_THREADS, "1"));
-            int  maxThreads      = Integer.valueOf(atlasProperties.getProperty(ATLAS_NOTIFICATION_ASYNCHRONOUS_MAX_THREADS, "1"));
-            long keepAliveTimeMs = Long.valueOf(atlasProperties.getProperty(ATLAS_NOTIFICATION_ASYNCHRONOUS_KEEP_ALIVE_TIME_MS, "10000"));
-
-            executor = new ThreadPoolExecutor(minThreads,
-                    maxThreads,
-                    keepAliveTimeMs,
-                    TimeUnit.MILLISECONDS,
-                    new SynchronousQueue<>(),
-                    new ThreadFactoryBuilder().setNameFormat("Atlas Notifier %d").setDaemon(true).build());
-
-            ShutdownHookManager.get().addShutdownHook(new Thread() {
-                @Override
-                public void run() {
-                    try {
-                        LOG.info("==> Shutdown of Atlas Hook");
-                        executor.shutdown();
-                        executor.awaitTermination(SHUTDOWN_HOOK_WAIT_TIME_MS, TimeUnit.MILLISECONDS);
-                        executor = null;
-                    } catch (InterruptedException excp) {
-                        LOG.info("Interrupt received in shutdown.", excp);
-                    } finally {
-                        LOG.info("<== Shutdown of Atlas Hook");
-                    }
-                }
-            }, AtlasConstants.ATLAS_SHUTDOWN_HOOK_PRIORITY);
-        }
-
+        ShutdownHookManager.get().addShutdownHook(new Thread() {
+            @Override
+            public void run() {
+                LOG.info("释放资源....");
+            }
+        }, AtlasConstants.ATLAS_SHUTDOWN_HOOK_PRIORITY);
         LOG.info("Created Atlas Hook");
     }
 
@@ -131,23 +103,11 @@ public abstract class UserDefineAtlasHook extends AtlasHook {
      */
     public static void notifyEntities(final List<HookNotification> messages, final UserGroupInformation ugi, final  int maxRetries) {
         final String messagaKey = NotificationContextHolder.getMessagaKey();
-
-        if (executor == null) { // send synchronously
-            notifyEntitiesInternal(messages, maxRetries, ugi, notificationInterface, logFailedMessages, failedMessagesLogger);
-        } else {
-            executor.submit(new Runnable() {
-                @Override
-                public void run() {
-                    NotificationContextHolder.setMessageKey(messagaKey);
-                    notifyEntitiesInternal(messages, maxRetries, ugi, notificationInterface, logFailedMessages, failedMessagesLogger);
-                    NotificationContextHolder.clear();
-                }
-            });
-        }
+        notifyEntitiesInternal(messages, maxRetries, ugi, notificationInterface, logFailedMessages, failedMessagesLogger);
     }
 
     static void notifyEntitiesInternal(final List<HookNotification> messages, int maxRetries, UserGroupInformation ugi,
-                                       final NotificationInterface notificationInterface,
+                                       final UserDefineNotificationInterface notificationInterface,
                                        boolean shouldLogFailedMessages, UserDefineFailedMessagesLogger logger) {
         if (messages == null || messages.isEmpty()) {
             return;
@@ -159,8 +119,7 @@ public abstract class UserDefineAtlasHook extends AtlasHook {
         for (int numAttempt = 1; numAttempt <= maxAttempts; numAttempt++) {
             if (numAttempt > 1) { // retry attempt
                 try {
-                    LOG.debug("Sleeping for {} ms before retry", notificationRetryInterval);
-
+                    LOG.info("Sleeping for {} ms before retry", notificationRetryInterval);
                     Thread.sleep(notificationRetryInterval);
                 } catch (InterruptedException ie) {
                     LOG.error("Notification hook thread sleep interrupted");
@@ -171,12 +130,12 @@ public abstract class UserDefineAtlasHook extends AtlasHook {
 
             try {
                 if (ugi == null) {
-                    notificationInterface.send(NotificationInterface.NotificationType.HOOK, messages);
+                    notificationInterface.send(UserDefineNotificationInterface.NotificationType.HOOK, messages);
                 } else {
                     PrivilegedExceptionAction<Object> privilegedNotify = new PrivilegedExceptionAction<Object>() {
                         @Override
                         public Object run() throws Exception {
-                            notificationInterface.send(NotificationInterface.NotificationType.HOOK, messages);
+                            notificationInterface.send(UserDefineNotificationInterface.NotificationType.HOOK, messages);
                             return messages;
                         }
                     };
@@ -215,7 +174,6 @@ public abstract class UserDefineAtlasHook extends AtlasHook {
      *
      * @param messages hook notification messages
      */
-    @Override
     protected void notifyEntities(List<HookNotification> messages, UserGroupInformation ugi) {
         notifyEntities(messages, ugi, notificationMaxRetries);
     }
@@ -272,7 +230,6 @@ public abstract class UserDefineAtlasHook extends AtlasHook {
         return config.getProperty(CLUSTER_NAME_KEY, DEFAULT_CLUSTER_NAME);
     }
 
-    @Override
     public String getMetadataNamespace() {
         return metadataNamespace;
     }
